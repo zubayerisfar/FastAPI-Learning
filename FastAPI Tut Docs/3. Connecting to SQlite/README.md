@@ -4,6 +4,15 @@
 
 This tutorial teaches you how to connect a FastAPI application to a SQLite database using **SQLModel**, which is a modern library that combines the power of SQLAlchemy and Pydantic. We'll build a simple Item API that can create and retrieve items from a SQLite database.
 
+If you are new to databases, think of it like this:
+
+- FastAPI handles the HTTP requests and responses.
+- SQLModel turns Python classes into database tables.
+- SQLite stores the data inside a local file.
+- The session is the working area where you add, save, and read data.
+
+So the full flow is: request comes in -> FastAPI validates the data -> SQLModel maps it to a table row -> SQLite stores it in a file -> FastAPI sends the response back.
+
 ## Project Structure
 
 ```
@@ -13,6 +22,17 @@ This tutorial teaches you how to connect a FastAPI application to a SQLite datab
 ```
 
 ---
+
+## Simple Mental Model
+
+Before looking at code, it helps to understand the roles of each file:
+
+- `database_setup.py` defines the database connection and the `Item` table model.
+- `main.py` creates the FastAPI app and exposes API endpoints.
+- When the app starts, the table is created automatically.
+- When a request hits an endpoint, the app opens a session, talks to the database, and returns data.
+
+In short: one file describes the data, the other file uses that data.
 
 ## Step 1: Database Setup (`database_setup.py`)
 
@@ -101,6 +121,33 @@ def create_db_and_tables():
   - `create_all(engine)`: Creates all tables that don't exist yet
   - This is idempotent - running it multiple times won't cause errors
   - If tables already exist, it does nothing
+
+  ### Full Example for `database_setup.py`
+
+  Here is the complete version of the file so you can see everything together:
+
+  ```python
+  from typing import Optional
+
+  from sqlmodel import Field, SQLModel, create_engine
+
+
+  class Item(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str
+    price: float
+    is_offer: bool = False
+
+
+  sqlite_file_name = "database.db"
+  sqlite_url = f"sqlite:///{sqlite_file_name}"
+
+  engine = create_engine(sqlite_url, echo=True)
+
+
+  def create_db_and_tables():
+    SQLModel.metadata.create_all(engine)
+  ```
 
 ---
 
@@ -230,6 +277,124 @@ def read_items():
   - `session.exec(...)`: Execute the query
   - `.all()`: Fetch all results as a list
 - `return items`: Return the list of items as JSON
+
+### Full Example for `main.py`
+
+Here is the complete version of the FastAPI app:
+
+```python
+from contextlib import asynccontextmanager
+from typing import List
+
+from fastapi import FastAPI
+from sqlmodel import Session, select
+
+from database_setup import Item, create_db_and_tables, engine
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    create_db_and_tables()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
+
+
+@app.post("/items/")
+def create_item(item: Item):
+    with Session(engine) as session:
+     session.add(item)
+     session.commit()
+     session.refresh(item)
+     return item
+
+
+@app.get("/items/", response_model=List[Item])
+def read_items():
+    with Session(engine) as session:
+     items = session.exec(select(Item)).all()
+     return items
+```
+
+## Easy Code Flow
+
+Think of the code flow in 4 simple steps:
+
+1. **Start the app**
+   - FastAPI loads `main.py`.
+   - The lifespan function runs first.
+   - `create_db_and_tables()` creates the SQLite table if it does not exist.
+
+2. **Send a POST request to create an item**
+   - Example JSON:
+
+```json
+{
+  "name": "Laptop",
+  "price": 999.99,
+  "is_offer": false
+}
+```
+
+- FastAPI checks whether the JSON matches the `Item` model.
+- If the data is valid, it creates an `Item` object.
+- The item is added to the session, committed to SQLite, and refreshed so the `id` is returned.
+
+3. **Send a GET request to read items**
+   - FastAPI opens a session again.
+   - `select(Item)` asks for every row in the table.
+   - The results are returned as a list of items.
+
+4. **Stop the app**
+   - The lifespan function finishes.
+   - If you add cleanup code after `yield`, it would run here.
+
+### Request Flow Diagram
+
+```text
+Client Request
+  |
+  v
+FastAPI Endpoint
+  |
+  v
+Validate Request Data with Item Model
+  |
+  v
+Open SQLModel Session
+  |
+  v
+Read or Write SQLite Database
+  |
+  v
+Return JSON Response
+```
+
+### Example Walkthrough
+
+If you send this POST request:
+
+```json
+{
+  "name": "Phone",
+  "price": 450.5,
+  "is_offer": true
+}
+```
+
+This is what happens internally:
+
+- FastAPI receives the request.
+- The request body is checked against the `Item` model.
+- `name` becomes a string, `price` becomes a float, and `is_offer` becomes a boolean.
+- A new `Item` object is created in memory.
+- `session.add(item)` stages it for saving.
+- `session.commit()` writes it to the database.
+- `session.refresh(item)` loads the generated `id`.
+- The final response contains the saved item.
+
+That is the main idea behind CRUD database work in FastAPI: validate first, then open a session, then commit changes, then return the result.
 
 ---
 
