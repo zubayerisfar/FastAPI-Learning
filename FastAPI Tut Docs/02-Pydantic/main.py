@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 from fastapi import FastAPI
+import uvicorn
 
 app = FastAPI()
 
@@ -28,3 +29,7 @@ def create_item(item: Item):
 @app.post("/items2/", response_model=ResponseModel)
 def create_item(item: Item):
     return item
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="127.0.0.1", port=8000)
