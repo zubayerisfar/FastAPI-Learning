@@ -260,7 +260,6 @@ class ItemCreate(SQLModel):
 ```python
 @app.post("/items/")
 def create_item(item: Item):  # Item includes id field!
-    # Docs show id as required - user confused!
 ```
 
 ✅ **Good:** Using separate models
@@ -268,7 +267,6 @@ def create_item(item: Item):  # Item includes id field!
 ```python
 @app.post("/items/", response_model=Item)
 def create_item(item: ItemCreate):  # ItemCreate has NO id!
-    # Docs show only name, price, is_offer - NO id required!
 ```
 
 **Model separation:**
@@ -304,16 +302,15 @@ async def lifespan(app: FastAPI):
     # CODE HERE RUNS ON STARTUP
     create_db_and_tables()
     yield
-    # CODE HERE RUNS ON SHUTDOWN (currently empty)
 ```
 
 **Why is this important?**
 
 The lifespan function ensures that:
 
-1. ✅ Tables are created BEFORE any requests arrive
-2. ✅ Resources are properly initialized
-3. ✅ Cleanup happens when the server stops
+1. Tables are created BEFORE any requests arrive
+2. Resources are properly initialized
+3. Cleanup happens when the server stops
 
 **Timeline:**
 
@@ -351,7 +348,6 @@ Creates the FastAPI instance with our lifespan manager attached.
 @app.post("/items/", response_model=Item)
 def create_item(item: ItemCreate):
     with Session(engine) as session:
-        # Convert ItemCreate to Item (with default id=None for auto-increment)
         db_item = Item.from_orm(item)
         session.add(db_item)
         session.commit()
@@ -362,14 +358,14 @@ def create_item(item: ItemCreate):
 **What happens step-by-step:**
 
 1. **Client sends (NO ID):** `{ "name": "Laptop", "price": 10, "is_offer": true }`
-   - ✅ `id` is NOT in the request
-   - ✅ Swagger docs don't show `id` as a required field
-   - ✅ User only fills in name, price, is_offer
+   - `id` is NOT in the request
+   - Swagger docs don't show `id` as a required field
+   - User only fills in name, price, is_offer
 
 2. **FastAPI validates:** Checks the JSON against ItemCreate model
-   - `name` is string ✅
-   - `price` is float ✅
-   - `is_offer` is boolean ✅
+   - `name` is string 
+   - `price` is float 
+   - `is_offer` is boolean 
 
 3. **Convert to database model:** `db_item = Item.from_orm(item)`
    - Takes the ItemCreate data
@@ -465,9 +461,9 @@ class ItemCreate(SQLModel):
     is_offer: bool = False
 ```
 
-- ✅ NO id field (we don't want users to provide it)
-- ✅ NO auto-generated fields
-- ✅ Only the data we need from the user
+- NO id field (we don't want users to provide it)
+- NO auto-generated fields
+- Only the data we need from the user
 
 **Response (Item)** - What we return:
 
@@ -479,9 +475,9 @@ class Item(SQLModel, table=True):
     is_offer: bool = False
 ```
 
-- ✅ Includes id (the auto-generated database ID)
-- ✅ Shows what's stored in the database
-- ✅ Complete information returned to client
+- Includes id (the auto-generated database ID)
+- Shows what's stored in the database
+- Complete information returned to client
 
 ### In Swagger Docs
 
@@ -499,12 +495,12 @@ POST /items/ required fields:
 
 ```
 POST /items/ required fields:
-- name: [required] ✅ (user only fills this)
-- price: [required] ✅
-- is_offer: [optional] ✅
+- name: [required]  (user only fills this)
+- price: [required] 
+- is_offer: [optional] 
 
 Response includes:
-- id: 0 (auto-generated) ✅
+- id: 0 (auto-generated) 
 ```
 
 Now the Swagger UI is user-friendly and intuitive!
@@ -600,15 +596,16 @@ id: Optional[int] = Field(
 ```
 
 **Without autoincrement:**
-❌ You must provide: `{"id": 0, "name": "Laptop", "price": 10}`
-❌ Error if ID already exists
-❌ Manual ID management needed
+
+- ❌ You must provide: `{"id": 0, "name": "Laptop", "price": 10}`
+- ❌ Error if ID already exists
+- ❌ Manual ID management needed
 
 **With autoincrement:**
-✅ You only send: `{"name": "Laptop", "price": 10}`
-✅ Database auto-generates: id=0
-✅ Next item gets: id=1
-✅ Each request auto-increments!
+- ✅ You only send: `{"name": "Laptop", "price": 10}`
+- ✅ Database auto-generates: id=0
+- ✅ Next item gets: id=1
+- ✅ Each request auto-increments!
 
 This is what makes the API user-friendly!
 
