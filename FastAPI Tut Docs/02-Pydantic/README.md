@@ -28,10 +28,11 @@ class Item(BaseModel):
 ```
 
 This single definition:
-✅ Validates request body  
-✅ Converts JSON to Python objects  
-✅ Generates Swagger documentation  
-✅ Ensures type safety
+
+- Validates request body
+- Converts JSON to Python objects
+- Generates Swagger documentation
+- Ensures type safety
 
 ---
 
@@ -397,9 +398,9 @@ def create_item(item: Item):
 
 **Behavior:**
 
-- Request includes `password` ✅
-- Response EXCLUDES `password` ✅
-- Swagger docs show `ResponseModel` structure ✅
+- Request includes `password`
+- Response EXCLUDES `password`
+- Swagger docs show `ResponseModel` structure
 
 ---
 
@@ -434,27 +435,12 @@ def create_item(item: Item):
         "message": "item created successfully",
         "item": item
     }
-    # Response:
-    # {
-    #   "message": "item created successfully",
-    #   "item": {
-    #     "name": "...",
-    #     "price": ...,
-    #     "is_offer": ...,
-    #     "password": "Dont show this"  ⚠️ Security issue!
-    #   }
-    # }
+
 
 # Endpoint 2: Returns only public data
 @app.post("/items2/", response_model=ResponseModel)
 def create_item(item: Item):
     return item
-    # Response:
-    # {
-    #   "name": "...",
-    #   "price": ...,
-    #   "is_offer": ...
-    # }  ✅ Password is hidden!
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8000)
@@ -480,7 +466,7 @@ if __name__ == "__main__":
 **Processing:**
 
 1. FastAPI validates JSON against `Item` model
-2. Checks: `name` is string ✅, `price` is float ✅, `is_offer` is bool ✅
+2. Checks: `name` is string , `price` is float , `is_offer` is bool
 3. Creates `Item` object with all fields
 4. Calls `create_item(item)` function
 
@@ -515,7 +501,7 @@ if __name__ == "__main__":
 
 **Processing:**
 
-1. FastAPI validates JSON against `Item` model ✅
+1. FastAPI validates JSON against `Item` model
 2. Calls `create_item(item)` function
 3. **BEFORE returning**, validates response against `ResponseModel`
 4. Strips out fields not in `ResponseModel` (removes `password`)
@@ -530,7 +516,7 @@ if __name__ == "__main__":
 }
 ```
 
-✅ Password is **never** sent to client!
+Password is **never** sent to client!
 
 ---
 
