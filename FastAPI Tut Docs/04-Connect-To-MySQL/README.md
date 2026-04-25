@@ -39,6 +39,7 @@ from pydantic import BaseModel
 ```
 
 **Explanation:**
+
 - `Column`: Define database table columns
 - `create_engine`: Manages database connections
 - `declarative_base`: Base class for ORM models
@@ -50,7 +51,7 @@ from pydantic import BaseModel
 ```python
 class Item(Base):
     __tablename__ = "items"
-    
+
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     name = Column(String, index=True)
     price = Column(Float)
@@ -67,6 +68,7 @@ class Item(Base):
 - `is_offer = Column(Boolean, default=False)` - Boolean with default value
 
 **Key Difference from SQLModel:**
+
 - SQLModel combines ORM and Pydantic into one class
 - SQLAlchemy ORM keeps them separate (better for complex apps)
 
@@ -87,6 +89,7 @@ class ItemResponse(BaseModel):
 ```
 
 **Why two schemas?**
+
 - `ItemCreate`: For incoming API requests (no id, user doesn't provide it)
 - `ItemResponse`: For outgoing API responses (includes id that database generated)
 
@@ -108,6 +111,7 @@ SessionLocal = sessionmaker(autoflush=False, bind=engine)
 - `SessionLocal`: Factory for creating database sessions
 
 By default (from environment variables):
+
 - Username: `root`
 - Password: (empty)
 - Host: `localhost`
@@ -153,6 +157,7 @@ def get_db():
 ```
 
 **Why dependency injection?**
+
 - Automatic session management (no forgetting to close)
 - Easier to test (mock the dependency)
 - FastAPI handles it automatically
@@ -171,6 +176,7 @@ def create_item(item: ItemCreate, db: Session = Depends(get_db)):
 ```
 
 **Flow:**
+
 1. User sends POST request with JSON: `{"name": "Book", "price": 15.99, "is_offer": true}`
 2. FastAPI validates with `ItemCreate` Pydantic schema
 3. `get_db()` automatically provides a database session
@@ -191,6 +197,7 @@ def read_items(db: Session = Depends(get_db)):
 ```
 
 **Modern SQLAlchemy 2.0 syntax:**
+
 - `select(Item)`: Build query (like SQL: `SELECT * FROM items`)
 - `db.execute(query)` Executes the query
 - `.scalars()`: Extract the Item objects (not tuples)
@@ -208,6 +215,7 @@ def read_item(item_id: int, db: Session = Depends(get_db)):
 ```
 
 **Error Handling:**
+
 - Check if item exists
 - Raise 404 if not found
 - Return item if found
@@ -229,6 +237,7 @@ def update_item(item_id: int, item: ItemCreate, db: Session = Depends(get_db)):
 ```
 
 **Steps:**
+
 1. Find the item by id
 2. Update all fields
 3. Commit changes to MySQL
@@ -256,6 +265,7 @@ python main.py
 ```
 
 The app will:
+
 1. Create MySQL tables (if they don't exist)
 2. Start the FastAPI server on http://127.0.0.1:8000
 3. Print all SQL queries to console
@@ -265,6 +275,7 @@ The app will:
 ## Testing with curl
 
 ### Create Item
+
 ```bash
 curl -X POST http://localhost:8000/items/ \
   -H "Content-Type: application/json" \
@@ -272,16 +283,19 @@ curl -X POST http://localhost:8000/items/ \
 ```
 
 ### Get All Items
+
 ```bash
 curl http://localhost:8000/items/
 ```
 
 ### Get Single Item
+
 ```bash
 curl http://localhost:8000/items/1
 ```
 
 ### Update Item
+
 ```bash
 curl -X PUT http://localhost:8000/items/1 \
   -H "Content-Type: application/json" \
@@ -289,6 +303,7 @@ curl -X PUT http://localhost:8000/items/1 \
 ```
 
 ### Delete Item
+
 ```bash
 curl -X DELETE http://localhost:8000/items/1
 ```
@@ -297,13 +312,13 @@ curl -X DELETE http://localhost:8000/items/1
 
 ## Key Differences: SQLModel vs SQLAlchemy ORM
 
-| Aspect | SQLModel | SQLAlchemy ORM |
-|--------|----------|-----------------|
-| **Combines** | ORM + Pydantic | Separate models |
-| **Boilerplate** | Less | More |
-| **Flexibility** | Limited | High |
-| **Production** | Good for simple apps | Industry standard |
-| **Learning** | Easier | More to learn |
+| Aspect          | SQLModel             | SQLAlchemy ORM    |
+| --------------- | -------------------- | ----------------- |
+| **Combines**    | ORM + Pydantic       | Separate models   |
+| **Boilerplate** | Less                 | More              |
+| **Flexibility** | Limited              | High              |
+| **Production**  | Good for simple apps | Industry standard |
+| **Learning**    | Easier               | More to learn     |
 
 ---
 
@@ -323,6 +338,198 @@ CREATE TABLE items (
 You can see this in XAMPP's phpmyadmin:
 
 ![Database table created](images/database_created.png)
+
+---
+
+## 🔄 Alternative Approach: Using SQLModel (Simpler Pattern)
+
+This module uses **SQLAlchemy ORM** with separate Pydantic schemas (recommended for production). However, there's an alternative approach using **SQLModel** that combines both concerns in a single model class.
+
+### SQLModel Approach: `database_setup_sqlmodel.py` & `main_sqlmodel.py`
+
+**Files available in this folder:**
+
+- `database_setup_sqlmodel.py` - SQLModel version
+- `main_sqlmodel.py` - SQLModel version (run with: `python main_sqlmodel.py`)
+
+#### Model Definition (SQLModel Way)
+
+```python
+from typing import Optional
+from sqlmodel import Field, SQLModel, create_engine, Session
+
+# Single class serves as BOTH ORM and Pydantic schema
+class Item(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str
+    price: float
+    is_offer: bool = False
+
+class ItemCreate(SQLModel):
+    name: str
+    price: float
+    is_offer: bool = False
+```
+
+**vs SQLAlchemy ORM way:**
+
+```python
+from sqlalchemy import Column, Integer, String, Float, Boolean
+from pydantic import BaseModel
+
+# Separate ORM model
+class Item(Base):
+    __tablename__ = "items"
+    id = Column(Integer, primary_key=True)
+    name = Column(String)
+    price = Column(Float)
+    is_offer = Column(Boolean)
+
+# Separate Pydantic schema
+class ItemResponse(BaseModel):
+    id: int
+    name: str
+    price: float
+    is_offer: bool
+```
+
+#### Creating Items (SQLModel Way)
+
+```python
+@app.post("/items/", response_model=Item)
+def create_item(item: ItemCreate):
+    with Session(engine) as session:
+        db_item = Item.model_validate(item)  # Convert to full Item
+        session.add(db_item)
+        session.commit()
+        session.refresh(db_item)
+        return db_item
+```
+
+**vs SQLAlchemy ORM way:**
+
+```python
+@app.post("/items/", response_model=ItemResponse)
+def create_item(item: ItemCreate, db: Session = Depends(get_db)):
+    db_item = Item(name=item.name, price=item.price, is_offer=item.is_offer)
+    db.add(db_item)
+    db.commit()
+    db.refresh(db_item)
+    return db_item
+```
+
+#### Reading Items (SQLModel Way)
+
+```python
+@app.get("/items/", response_model=List[Item])
+def read_items():
+    with Session(engine) as session:
+        items = session.exec(select(Item)).all()
+        return items
+```
+
+**vs SQLAlchemy ORM way:**
+
+```python
+@app.get("/items/", response_model=List[ItemResponse])
+def read_items(db: Session = Depends(get_db)):
+    query = select(Item)
+    items = db.execute(query).scalars().all()
+    return items
+```
+
+#### Session Management (SQLModel Way)
+
+```python
+# Uses context managers - simpler but less flexible
+with Session(engine) as session:
+    items = session.exec(select(Item)).all()
+```
+
+**vs SQLAlchemy ORM way:**
+
+```python
+# Uses dependency injection - more powerful and testable
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+@app.get("/items/")
+def read_items(db: Session = Depends(get_db)):
+    items = db.execute(select(Item)).scalars().all()
+```
+
+#### Startup Pattern (SQLModel Way)
+
+```python
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    create_db_and_tables()
+    yield  # App runs here
+    # Cleanup here if needed
+```
+
+**vs SQLAlchemy ORM way:**
+
+```python
+# Direct call at module level
+create_db_and_tables()
+
+app = FastAPI()  # No lifespan needed
+```
+
+### Comparison: SQLModel vs SQLAlchemy ORM
+
+| Feature                | SQLModel             | SQLAlchemy ORM (This Module) |
+| ---------------------- | -------------------- | ---------------------------- |
+| **Lines of Code**      | Fewer                | More                         |
+| **Learning Curve**     | Easier               | Steeper                      |
+| **Type Hints**         | Good                 | Excellent                    |
+| **Production Ready**   | Yes, for simple apps | Yes, industry standard       |
+| **Flexibility**        | Limited              | High                         |
+| **Schema Separation**  | Combined             | Separated                    |
+| **Session Management** | Context managers     | Dependency injection         |
+| **Scalability**        | Good                 | Excellent                    |
+| **Job Market**         | Growing              | Most jobs                    |
+| **Best For**           | Learning, prototypes | Production apps              |
+
+### When to Use Each
+
+**Use SQLModel (`main_sqlmodel.py`) when:**
+
+- Building small projects
+- Learning FastAPI basics
+- Rapid prototyping
+- API response exactly matches database
+- You want less boilerplate
+
+**Use SQLAlchemy ORM (`main.py`) when:**
+
+- Building production applications
+- Database schema differs from API response
+- Need custom validation per endpoint
+- Complex queries and relationships
+- Testing is important
+- Team needs maintainability
+
+### Running Both Versions
+
+**SQLAlchemy ORM version (recommended):**
+
+```bash
+python main.py
+```
+
+**SQLModel version:**
+
+```bash
+python main_sqlmodel.py
+```
+
+Both start on `http://127.0.0.1:8000` - don't run them simultaneously on the same port!
 
 ```python
 import os
