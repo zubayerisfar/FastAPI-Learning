@@ -2,19 +2,19 @@
 
 ## Overview
 
-This tutorial shows how to connect a FastAPI application to a real MySQL database. The code is almost identical to using SQLite, but now your data lives on a MySQL server instead of a single file. This is what production applications use.
+This tutorial shows how to connect a FastAPI application to a real MySQL database using **SQLAlchemy ORM** with dependency injection. The same pattern works for SQLite, PostgreSQL, and other databases. This is the industry-standard approach used in production applications.
 
 The two files you need to understand are:
 
-- **database_setup.py**: Configures MySQL connection and defines the Item table
+- **database_setup.py**: Configures MySQL connection and defines the Item ORM model
 - **main.py**: Creates the API endpoints that use that database
 
 ## Project Structure
 
 ```
-4. Connect to MySQL/
-├── database_setup.py  # Database configuration with MySQL
-└── main.py           # FastAPI application (identical to SQLite version)
+04-Connect-To-MySQL/
+├── database_setup.py  # Database configuration with MySQL, ORM models, and Pydantic schemas
+└── main.py           # FastAPI application with dependency injection
 ```
 
 ---
@@ -24,79 +24,305 @@ The two files you need to understand are:
 You'll need:
 
 - **MySQL Server** running (XAMPP, MySQL Community Server, or Docker)
-- **Python packages**: `pip install fastapi uvicorn sqlmodel pymysql cryptography`
+- **Python packages**: `pip install fastapi uvicorn sqlalchemy pymysql cryptography pydantic`
 
 ---
 
-## Understanding the Database Model
+## Step 1: Database Configuration (`database_setup.py`)
 
-Let's look at how we define the Item table in `database_setup.py`:
+### Import SQLAlchemy Components
 
 ```python
-class Item(SQLModel, table=True):
-    id: Optional[int] = Field(default=None,
-                            primary_key=True,
-                            sa_column_kwargs={"autoincrement": True})
-    name: str
-    price: float
-    is_offer: bool = False
+from sqlalchemy import Column, Integer, String, Float, Boolean, create_engine
+from sqlalchemy.orm import declarative_base, sessionmaker
+from pydantic import BaseModel
+```
+
+**Explanation:**
+- `Column`: Define database table columns
+- `create_engine`: Manages database connections
+- `declarative_base`: Base class for ORM models
+- `sessionmaker`: Factory for database sessions
+- `BaseModel`: Pydantic for API request/response validation
+
+### Define the ORM Model
+
+```python
+class Item(Base):
+    __tablename__ = "items"
+    
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    name = Column(String, index=True)
+    price = Column(Float)
+    is_offer = Column(Boolean, default=False)
 ```
 
 **What each line does:**
 
-- `class Item(SQLModel, table=True):` - Creates a table in MySQL called "item"
-- `id: Optional[int]` - The primary key, can be None when creating (MySQL generates it)
-- `Field(default=None, primary_key=True, sa_column_kwargs={"autoincrement": True})` - Makes MySQL auto-increment the id automatically
-- `name: str`, `price: float`, `is_offer: bool = False` - The actual data fields
+- `class Item(Base):` - Creates a class that will map to a MySQL table
+- `__tablename__ = "items"` - The actual table name in MySQL
+- `id = Column(Integer, primary_key=True, ...)` - Primary key with auto-increment
+- `name = Column(String, index=True)` - Text field with database index for faster queries
+- `price = Column(Float)` - Decimal numbers
+- `is_offer = Column(Boolean, default=False)` - Boolean with default value
 
-The key insight: You define Python classes, SQLModel converts them to database tables. No need to write SQL CREATE statements yourself.
+**Key Difference from SQLModel:**
+- SQLModel combines ORM and Pydantic into one class
+- SQLAlchemy ORM keeps them separate (better for complex apps)
 
----
+### Define Pydantic Schemas
 
-## Connecting to MySQL Server
+```python
+class ItemCreate(BaseModel):
+    name: str
+    price: float
+    is_offer: bool = False
 
-When you start the FastAPI app, it automatically creates the table in MySQL. Here's what happens behind the scenes:
+
+class ItemResponse(BaseModel):
+    id: int
+    name: str
+    price: float
+    is_offer: bool
+```
+
+**Why two schemas?**
+- `ItemCreate`: For incoming API requests (no id, user doesn't provide it)
+- `ItemResponse`: For outgoing API responses (includes id that database generated)
+
+This separation is cleaner and more secure than mixing database and API concerns.
+
+### Connect to MySQL
 
 ```python
 mysql_url = f"mysql+pymysql://{MYSQL_USER}:{MYSQL_PASSWORD}@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DB}"
+engine = create_engine(mysql_url, echo=True)
+SessionLocal = sessionmaker(autoflush=False, bind=engine)
 ```
 
-This connection string tells Python: "Connect to MySQL using pymysql driver, with these credentials, at this host and port, and use this database."
+**Explanation:**
 
-The format is: `mysql+pymysql://username:password@localhost:3306/database_name`
+- `mysql_url`: Connection string format: `mysql+pymysql://user:pass@host:port/database`
+- `engine`: Manages the connection pool
+- `echo=True`: Prints all SQL to console (remove for production)
+- `SessionLocal`: Factory for creating database sessions
 
 By default (from environment variables):
-
 - Username: `root`
 - Password: (empty)
 - Host: `localhost`
 - Port: `3306`
 - Database: `fastapi_db`
 
-```python
-engine = create_engine(mysql_url, echo=True)
-```
-
-The engine manages the connection. `echo=True` prints all SQL queries to console so you can see what's happening.
+### Create Tables at Startup
 
 ```python
 def create_db_and_tables() -> None:
-    SQLModel.metadata.create_all(engine)
+    Base.metadata.create_all(engine)
 ```
 
-This function runs automatically when your app starts. It creates the Item table in MySQL if it doesn't exist.
-
-### What Table Creation Looks Like
-
-When you run the app, FastAPI creates the table and logs SQL. Here's what you see in XAMPP:
-
-![Database table created at startup](images/database_created.png)
+This function creates the MySQL table if it doesn't exist. We call it in `main.py`.
 
 ---
 
-## The Complete database_setup.py
+## Step 2: FastAPI Application (`main.py`)
 
-Here's the full database configuration file for reference:
+### Initialize the App
+
+```python
+from fastapi import FastAPI, Depends, HTTPException
+from sqlalchemy.orm import Session
+from sqlalchemy import select
+
+# Create tables on startup
+create_db_and_tables()
+
+app = FastAPI()
+```
+
+### Database Session Dependency
+
+```python
+def get_db():
+    """Dependency: Get database session"""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+```
+
+**Why dependency injection?**
+- Automatic session management (no forgetting to close)
+- Easier to test (mock the dependency)
+- FastAPI handles it automatically
+- Used in every endpoint
+
+### CREATE - Add New Item
+
+```python
+@app.post("/items/", response_model=ItemResponse)
+def create_item(item: ItemCreate, db: Session = Depends(get_db)):
+    db_item = Item(name=item.name, price=item.price, is_offer=item.is_offer)
+    db.add(db_item)
+    db.commit()
+    db.refresh(db_item)
+    return db_item
+```
+
+**Flow:**
+1. User sends POST request with JSON: `{"name": "Book", "price": 15.99, "is_offer": true}`
+2. FastAPI validates with `ItemCreate` Pydantic schema
+3. `get_db()` automatically provides a database session
+4. Create ORM object from Pydantic data
+5. `db.add()` prepares it for insertion
+6. `db.commit()` writes to MySQL
+7. `db.refresh()` gets the generated id
+8. Return with `ItemResponse` schema (includes id)
+
+### READ - Get All Items
+
+```python
+@app.get("/items/", response_model=List[ItemResponse])
+def read_items(db: Session = Depends(get_db)):
+    query = select(Item)
+    items = db.execute(query).scalars().all()
+    return items
+```
+
+**Modern SQLAlchemy 2.0 syntax:**
+- `select(Item)`: Build query (like SQL: `SELECT * FROM items`)
+- `db.execute(query)` Executes the query
+- `.scalars()`: Extract the Item objects (not tuples)
+- `.all()`: Get all results (or use `.first()` for one)
+
+### READ - Get Single Item
+
+```python
+@app.get("/items/{item_id}", response_model=ItemResponse)
+def read_item(item_id: int, db: Session = Depends(get_db)):
+    db_item = db.query(Item).filter(Item.id == item_id).first()
+    if db_item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return db_item
+```
+
+**Error Handling:**
+- Check if item exists
+- Raise 404 if not found
+- Return item if found
+
+### UPDATE - Modify Item
+
+```python
+@app.put("/items/{item_id}", response_model=ItemResponse)
+def update_item(item_id: int, item: ItemCreate, db: Session = Depends(get_db)):
+    db_item = db.query(Item).filter(Item.id == item_id).first()
+    if db_item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    db_item.name = item.name
+    db_item.price = item.price
+    db_item.is_offer = item.is_offer
+    db.commit()
+    db.refresh(db_item)
+    return db_item
+```
+
+**Steps:**
+1. Find the item by id
+2. Update all fields
+3. Commit changes to MySQL
+4. Return updated item
+
+### DELETE - Remove Item
+
+```python
+@app.delete("/items/{item_id}")
+def delete_item(item_id: int, db: Session = Depends(get_db)):
+    db_item = db.query(Item).filter(Item.id == item_id).first()
+    if db_item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    db.delete(db_item)
+    db.commit()
+    return {"message": "Item deleted successfully"}
+```
+
+---
+
+## Running the Application
+
+```bash
+python main.py
+```
+
+The app will:
+1. Create MySQL tables (if they don't exist)
+2. Start the FastAPI server on http://127.0.0.1:8000
+3. Print all SQL queries to console
+
+---
+
+## Testing with curl
+
+### Create Item
+```bash
+curl -X POST http://localhost:8000/items/ \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Book","price":15.99,"is_offer":true}'
+```
+
+### Get All Items
+```bash
+curl http://localhost:8000/items/
+```
+
+### Get Single Item
+```bash
+curl http://localhost:8000/items/1
+```
+
+### Update Item
+```bash
+curl -X PUT http://localhost:8000/items/1 \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Updated Book","price":12.99,"is_offer":false}'
+```
+
+### Delete Item
+```bash
+curl -X DELETE http://localhost:8000/items/1
+```
+
+---
+
+## Key Differences: SQLModel vs SQLAlchemy ORM
+
+| Aspect | SQLModel | SQLAlchemy ORM |
+|--------|----------|-----------------|
+| **Combines** | ORM + Pydantic | Separate models |
+| **Boilerplate** | Less | More |
+| **Flexibility** | Limited | High |
+| **Production** | Good for simple apps | Industry standard |
+| **Learning** | Easier | More to learn |
+
+---
+
+## What's Happening in MySQL
+
+When you run the app, it creates this table:
+
+```sql
+CREATE TABLE items (
+    id INTEGER PRIMARY KEY AUTO_INCREMENT,
+    name VARCHAR(255) NOT NULL,
+    price FLOAT NOT NULL,
+    is_offer BOOLEAN DEFAULT FALSE
+);
+```
+
+You can see this in XAMPP's phpmyadmin:
+
+![Database table created](images/database_created.png)
 
 ```python
 import os

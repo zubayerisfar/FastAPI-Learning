@@ -2,7 +2,15 @@
 
 ## Overview
 
-This tutorial teaches you how to build a full **CRUD (Create, Read, Update, Delete)** API using FastAPI with SQLAlchemy ORM. This is different from previous tutorials - instead of SQLModel, we use the traditional SQLAlchemy approach with separate Pydantic schemas. This pattern is widely used in production applications and gives you fine-grained control over your database models and API schemas.
+This tutorial teaches you how to build a full **CRUD (Create, Read, Update, Delete)** API using FastAPI with modern **SQLAlchemy ORM** and dependency injection. This is the industry-standard pattern used in production applications worldwide.
+
+**Key differences from previous modules:**
+
+- ✅ Uses SQLAlchemy ORM with `DeclarativeBase` (modern SQLAlchemy 2.0+)
+- ✅ Separates ORM models from Pydantic schemas
+- ✅ Uses dependency injection with `Depends(get_db)`
+- ✅ Modern type annotations with `Mapped[type]`
+- ✅ SQLAlchemy 2.0 `select()` syntax instead of `.query()`
 
 ## What is CRUD?
 
@@ -18,86 +26,526 @@ Every database-backed application needs these operations!
 ## Project Structure
 
 ```
-7. CRUD API/
-├── db.py         # Database configuration with SQLAlchemy
-├── models.py     # Database ORM models
-└── app.py        # FastAPI application with CRUD endpoints
+07-CRUD-API/
+├── db.py           # Database configuration with SQLAlchemy
+├── models.py       # ORM models (database tables)
+├── app.py          # FastAPI application with CRUD endpoints
+└── README.md       # This file
 ```
 
 ---
 
 ## Step 1: Database Configuration (`db.py`)
 
-We'll set up SQLAlchemy with the **declarative base** pattern.
+### Create the Base Class
 
 ```python
-from sqlalchemy import create_engine, MetaData
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy import create_engine
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
+
+class Base(DeclarativeBase):
+    """Base class for all ORM models"""
+    pass
 ```
 
-**Line-by-line explanation:**
+**What is `DeclarativeBase`?**
 
-- `from sqlalchemy import create_engine, MetaData`:
-  - `create_engine`: Creates the database connection engine
-  - `MetaData`: Container for database schema information (not used here but imported for completeness)
-- `from sqlalchemy.orm import declarative_base, sessionmaker`:
-  - `declarative_base`: **SQLAlchemy 2.0 syntax** - creates the base class for ORM models
-  - In older versions, this was `from sqlalchemy.ext.declarative import declarative_base`
-  - `sessionmaker`: Factory for creating database sessions
+- Modern SQLAlchemy 2.0+ way to define ORM models
+- All your models will inherit from this base
+- Replaces the old `declarative_base()` function
+- Better typing support and cleaner syntax
 
-### Define Database URL
+**Old way (still works but deprecated):**
+
+```python
+from sqlalchemy.orm import declarative_base
+Base = declarative_base()
+```
+
+### Create the Engine
 
 ```python
 DATABASE_URL = "sqlite:///./database.db"
-```
-
-**Line-by-line explanation:**
-
-- `DATABASE_URL`: Connection string for SQLite
-- `sqlite:///./database.db`: Creates `database.db` file in current directory
-  - `sqlite:///`: SQLite protocol
-  - `./database.db`: Relative path to database file
-  - For production, use PostgreSQL: `postgresql://user:pass@host:port/dbname`
-
-### Create Database Engine
-
-```python
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 ```
 
-**Line-by-line explanation:**
+**Explanation:**
 
-- `create_engine(DATABASE_URL, ...)`: Create the database engine
-  - The engine manages the connection pool
-  - Handles low-level database communication
-- `connect_args={"check_same_thread": False}`:
-  - **SQLite-specific configuration**
-  - By default, SQLite only allows connections from the thread that created them
-  - `check_same_thread": False` disables this check
-  - **Why?** FastAPI uses multiple threads/workers
-  - **Not needed for PostgreSQL/MySQL** - only SQLite has this limitation
+- `sqlite:///./database.db`: SQLite database file
+- `check_same_thread: False`: SQLite allows multiple threads (FastAPI uses workers)
+- For PostgreSQL: `postgresql://user:password@localhost/dbname`
+- For MySQL: `mysql+pymysql://user:password@localhost/dbname`
 
-### Create Base Class
+### Create Session Factory
 
 ```python
-base = declarative_base()
+SessionLocal = sessionmaker(bind=engine, autoflush=False)
 ```
 
-**Line-by-line explanation:**
+**What does this do?**
 
-- `base = declarative_base()`: Creates the base class for ORM models
-  - All your models will inherit from this base
-  - This base class provides:
-    - Database table mapping
-    - Column definitions
-    - Relationships
-    - Query capabilities
-  - **This is the foundation of SQLAlchemy ORM**
+- `SessionLocal`: Factory to create new database sessions
+- `bind=engine`: Connect sessions to our database engine
+- `autoflush=False`: Don't auto-flush before every query (we control it)
 
-**What does it do?**
+---
 
-- When you create a class inheriting from `base`, SQLAlchemy knows it's a database table
-- The base tracks all models for table creation
+## Step 2: ORM Models (`models.py`)
+
+### Modern Mapped Syntax
+
+```python
+from sqlalchemy import String, Integer, Float
+from sqlalchemy.orm import Mapped, mapped_column
+from db import Base
+
+class Item(Base):
+    __tablename__ = "items"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(100), index=True)
+    price: Mapped[float] = mapped_column(Float)
+    quantity: Mapped[int] = mapped_column(Integer, default=0)
+```
+
+**Modern Features (SQLAlchemy 2.0+):**
+
+- `Mapped[type]`: Type hint for the column (int, str, float, etc.)
+- `mapped_column()`: SQLAlchemy function to define columns
+- `String(100)`: Max 100 characters
+- `index=True`: Create database index for faster queries
+- `primary_key=True`: Make it the unique identifier
+- `default=0`: Default value for new rows
+
+**Old way (still works):**
+
+```python
+from sqlalchemy import Column, Integer, String, Float
+id = Column(Integer, primary_key=True, index=True)
+```
+
+**Why is Mapped better?**
+
+- ✅ Type hints for IDE autocomplete
+- ✅ Better type checking
+- ✅ Cleaner code
+- ✅ Future-proof
+
+---
+
+## Step 3: FastAPI Application (`app.py`)
+
+### Initialize Tables
+
+```python
+from db import SessionLocal, engine, Base
+from models import Item
+
+# Create tables on startup
+Base.metadata.create_all(bind=engine)
+```
+
+**What does this do?**
+
+- Creates all tables defined in models
+- Only creates tables that don't exist
+- Called once when app starts
+
+### Define Pydantic Schemas
+
+```python
+from pydantic import BaseModel
+
+class ItemCreate(BaseModel):
+    name: str
+    price: float
+    quantity: float
+
+
+class ItemResponse(BaseModel):
+    id: int
+    name: str
+    price: float
+    quantity: float
+```
+
+**Why separate schemas?**
+
+- `ItemCreate`: API request body (no id, user shouldn't provide it)
+- `ItemResponse`: API response (includes id generated by database)
+- Cleaner and more secure
+
+### Database Session Dependency
+
+```python
+from fastapi import FastAPI, Depends
+from sqlalchemy.orm import Session
+
+def get_db():
+    """Dependency: Get database session"""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+```
+
+**How dependency injection works:**
+
+1. Every endpoint that needs database gets a session via `Depends(get_db)`
+2. FastAPI automatically calls `get_db()`
+3. Session is available inside the endpoint
+4. After endpoint finishes, FastAPI calls `db.close()` automatically
+5. **No manual session management needed!**
+
+---
+
+## Step 4: CRUD Operations
+
+### CREATE - Add New Item (POST)
+
+```python
+@app.post("/items/", response_model=ItemResponse)
+def create_item(item: ItemCreate, db: Session = Depends(get_db)):
+    """Create a new item"""
+    db_item = Item(name=item.name, price=item.price, quantity=item.quantity)
+    db.add(db_item)
+    db.commit()
+    db.refresh(db_item)
+    return db_item
+```
+
+**Flow:**
+
+1. User sends: `POST /items/` with `{"name": "Laptop", "price": 999.99, "quantity": 5}`
+2. FastAPI validates with `ItemCreate` schema
+3. `get_db()` provides a database session
+4. Create `Item` ORM object from Pydantic data
+5. `db.add()` - Prepare for insertion (not committed yet)
+6. `db.commit()` - Write to database
+7. `db.refresh()` - Reload to get generated `id`
+8. Return with `ItemResponse` (includes id)
+
+**Example request:**
+
+```bash
+curl -X POST http://localhost:8000/items/ \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Laptop","price":999.99,"quantity":5}'
+```
+
+**Response:**
+
+```json
+{
+  "id": 1,
+  "name": "Laptop",
+  "price": 999.99,
+  "quantity": 5
+}
+```
+
+### READ - Get All Items (GET)
+
+```python
+@app.get("/items/", response_model=List[ItemResponse])
+def read_items(db: Session = Depends(get_db)):
+    """Get all items"""
+    query = select(Item)
+    items = db.execute(query).scalars().all()
+    return items
+```
+
+**Modern SQLAlchemy 2.0 syntax:**
+
+- `select(Item)`: Build a query (equivalent to SQL: `SELECT * FROM items`)
+- `db.execute(query)`: Execute the query
+- `.scalars()`: Extract Item objects (not tuples)
+- `.all()`: Get all results
+
+**Old way (still works but deprecated):**
+
+```python
+items = db.query(Item).all()
+```
+
+**Example request:**
+
+```bash
+curl http://localhost:8000/items/
+```
+
+**Response:**
+
+```json
+[
+  { "id": 1, "name": "Laptop", "price": 999.99, "quantity": 5 },
+  { "id": 2, "name": "Mouse", "price": 29.99, "quantity": 10 }
+]
+```
+
+### READ - Get Single Item (GET)
+
+```python
+@app.get("/items/{item_id}", response_model=ItemResponse)
+def read_item(item_id: int, db: Session = Depends(get_db)):
+    """Get a specific item by ID"""
+    db_item = db.query(Item).filter(Item.id == item_id).first()
+    if db_item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return db_item
+```
+
+**Steps:**
+
+1. Take `item_id` from URL path
+2. Query database: "Find item where id = item_id"
+3. `.first()`: Get the first (and only) result
+4. If not found, raise 404 error
+5. Return the item
+
+**Example request:**
+
+```bash
+curl http://localhost:8000/items/1
+```
+
+**Response (if found):**
+
+```json
+{
+  "id": 1,
+  "name": "Laptop",
+  "price": 999.99,
+  "quantity": 5
+}
+```
+
+**Response (if not found):**
+
+```json
+{
+  "detail": "Item not found"
+}
+```
+
+Status: 404
+
+### UPDATE - Modify Item (PUT)
+
+```python
+@app.put("/items/{item_id}", response_model=ItemResponse)
+def update_item(item_id: int, item: ItemCreate, db: Session = Depends(get_db)):
+    """Update an existing item"""
+    db_item = db.query(Item).filter(Item.id == item_id).first()
+    if db_item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    db_item.name = item.name
+    db_item.price = item.price
+    db_item.quantity = item.quantity
+    db.commit()
+    db.refresh(db_item)
+    return db_item
+```
+
+**Steps:**
+
+1. Find item by id (404 if not found)
+2. Update all fields from request body
+3. `db.commit()` - Write changes to database
+4. `db.refresh()` - Reload from database
+5. Return updated item
+
+**Example request:**
+
+```bash
+curl -X PUT http://localhost:8000/items/1 \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Gaming Laptop","price":1299.99,"quantity":3}'
+```
+
+**Response:**
+
+```json
+{
+  "id": 1,
+  "name": "Gaming Laptop",
+  "price": 1299.99,
+  "quantity": 3
+}
+```
+
+### DELETE - Remove Item (DELETE)
+
+```python
+@app.delete("/items/{item_id}")
+def delete_item(item_id: int, db: Session = Depends(get_db)):
+    """Delete an item"""
+    db_item = db.query(Item).filter(Item.id == item_id).first()
+    if db_item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    db.delete(db_item)
+    db.commit()
+    return {"message": "Item deleted successfully"}
+```
+
+**Steps:**
+
+1. Find item by id (404 if not found)
+2. `db.delete()` - Mark for deletion
+3. `db.commit()` - Write deletion to database
+4. Return success message
+
+**Example request:**
+
+```bash
+curl -X DELETE http://localhost:8000/items/1
+```
+
+**Response:**
+
+```json
+{
+  "message": "Item deleted successfully"
+}
+```
+
+---
+
+## Running the Application
+
+```bash
+python -m uvicorn app:app --reload
+```
+
+Or if you have a main block:
+
+```bash
+python app.py
+```
+
+The server starts on: **http://127.0.0.1:8000**
+
+### Interactive API Documentation
+
+FastAPI automatically creates documentation at:
+
+- **Swagger UI**: http://127.0.0.1:8000/docs
+- **ReDoc**: http://127.0.0.1:8000/redoc
+
+You can test all endpoints directly in your browser!
+
+---
+
+## Full CRUD Test Sequence
+
+```bash
+# 1. Create item
+curl -X POST http://localhost:8000/items/ \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Keyboard","price":79.99,"quantity":20}'
+
+# 2. Get all items
+curl http://localhost:8000/items/
+
+# 3. Get single item
+curl http://localhost:8000/items/1
+
+# 4. Update item
+curl -X PUT http://localhost:8000/items/1 \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Mechanical Keyboard","price":89.99,"quantity":15}'
+
+# 5. Delete item
+curl -X DELETE http://localhost:8000/items/1
+```
+
+---
+
+## Key Improvements in This Version
+
+| Feature                 | Old Code               | New Code                           |
+| ----------------------- | ---------------------- | ---------------------------------- |
+| **Base class**          | `declarative_base()`   | `DeclarativeBase`                  |
+| **Columns**             | `Column(Integer, ...)` | `Mapped[int] = mapped_column(...)` |
+| **Sessions**            | Context managers       | Dependency injection               |
+| **Queries**             | `.query()` method      | `select()` function                |
+| **Type hints**          | None                   | Full type hints                    |
+| **Error handling**      | Dict errors            | HTTPException                      |
+| **Response validation** | None                   | Pydantic schemas                   |
+
+---
+
+## Common Patterns
+
+### Filtering Multiple Conditions
+
+```python
+from sqlalchemy import and_
+
+query = select(Item).where(
+    and_(
+        Item.price > 50,
+        Item.quantity > 10
+    )
+)
+items = db.execute(query).scalars().all()
+```
+
+### Pagination
+
+```python
+skip = 0
+limit = 10
+
+query = select(Item).offset(skip).limit(limit)
+items = db.execute(query).scalars().all()
+```
+
+### Sorting
+
+```python
+from sqlalchemy import desc
+
+query = select(Item).order_by(desc(Item.price))
+items = db.execute(query).scalars().all()
+```
+
+---
+
+## Best Practices
+
+✅ **DO:**
+
+- Use dependency injection for sessions
+- Separate ORM models from Pydantic schemas
+- Use type hints everywhere
+- Handle errors with HTTPException
+- Validate input with Pydantic
+
+❌ **DON'T:**
+
+- Forget to call `db.commit()`
+- Use global sessions
+- Skip error handling
+- Mix database and API concerns
+- Hardcode credentials (use environment variables)
+
+---
+
+## Summary
+
+You've learned:
+
+- ✅ Modern SQLAlchemy 2.0 with `DeclarativeBase`
+- ✅ Type-safe columns with `Mapped[type]`
+- ✅ Dependency injection for clean code
+- ✅ Complete CRUD operations
+- ✅ Error handling and validation
+- ✅ Best practices for production code
+
+This pattern is used in millions of production applications. Master it and you'll be able to build any database-backed API!
+
 - Enables `base.metadata.create_all(engine)` to create all tables
 
 ### Create Session Factory
@@ -112,13 +560,11 @@ SessionLocal = sessionmaker(
 **Line-by-line explanation:**
 
 - `SessionLocal = sessionmaker(...)`: Create a session factory
-
   - **Not a session itself** - it's a factory that creates sessions
   - Think of it as a "session constructor"
   - Naming convention: `SessionLocal` indicates it's for local use
 
 - `bind=engine`: Bind this session factory to our engine
-
   - All sessions created will use this engine
   - Connects sessions to our database
 
@@ -172,13 +618,11 @@ class Item(base):
   - **Inheritance from base** tells SQLAlchemy this is a database table
   - Class name `Item` is the Python name (singular)
 - `__tablename__ = "items"`: The actual table name in the database
-
   - **Required**: Tells SQLAlchemy what to name the SQL table
   - By convention, use lowercase plural: "items", "users", "products"
   - SQL table will be named `items`
 
 - `id = Column(Integer, primary_key=True, index=True)`: Primary key column
-
   - `Column(...)`: Define a table column
   - `Integer`: Data type - whole numbers
   - `primary_key=True`: This is the primary key
@@ -190,7 +634,6 @@ class Item(base):
     - Automatically indexed for primary keys, but explicit is clear
 
 - `name = Column(String, index=True)`: Name column
-
   - `String`: Variable-length text (no length limit specified)
   - For production, specify length: `String(100)`
   - `index=True`: Create index for fast searches by name
@@ -198,7 +641,6 @@ class Item(base):
     - Makes `WHERE name = ?` queries much faster
 
 - `price = Column(Float)`: Price column
-
   - `Float`: Decimal numbers (e.g., 19.99, 1234.56)
   - **Note**: For money, use `DECIMAL` in production: `Column(DECIMAL(10, 2))`
   - Float has precision issues with money calculations
@@ -257,7 +699,6 @@ class ItemSchema(BaseModel):
 **Line-by-line explanation:**
 
 - `class ItemSchema(BaseModel):`: Pydantic model for validation
-
   - **Separate from ORM model!**
   - `Item` (models.py) = Database table
   - `ItemSchema` (app.py) = API request/response format
@@ -315,7 +756,6 @@ def create_item(item: ItemSchema):
 **Line-by-line explanation:**
 
 - `@app.post("/items/")`: POST endpoint at `/items/`
-
   - POST is the HTTP method for creating resources
   - Trailing slash is a convention
 
@@ -431,7 +871,6 @@ def read_item(item_id: int):
 **Line-by-line explanation:**
 
 - `@app.get("/items/{item_id}")`: GET endpoint with path parameter
-
   - `{item_id}`: Path parameter - captures value from URL
   - Example URL: `/items/5` → `item_id = 5`
 
@@ -523,7 +962,6 @@ def update_item(item_id: int, item: ItemSchema):
 **Line-by-line explanation:**
 
 - `@app.put("/items/{item_id}")`: PUT endpoint
-
   - PUT is the HTTP method for updating resources
   - Requires the full object (replace entire item)
   - For partial updates, use PATCH
@@ -620,7 +1058,6 @@ def delete_item(item_id: int):
 **Line-by-line explanation:**
 
 - `@app.delete("/items/{item_id}")`: DELETE endpoint
-
   - DELETE is the HTTP method for removing resources
 
 - `def delete_item(item_id: int):`: Takes only ID parameter

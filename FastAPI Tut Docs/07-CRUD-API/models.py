@@ -1,12 +1,13 @@
-from sqlalchemy import Column, Integer, String, Float
-from db import base
+from sqlalchemy import String, Integer, Float
+from sqlalchemy.orm import Mapped, mapped_column
+from db import Base
 
-class Item(base):
+
+class Item(Base):
     __tablename__ = "items"
     
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, index=True)
-    price = Column(Float)
-    quantity = Column(Integer, default=0)
-    
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(100), index=True)
+    price: Mapped[float] = mapped_column(Float)
+    quantity: Mapped[int] = mapped_column(Integer, default=0)
     

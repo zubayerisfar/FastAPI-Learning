@@ -39,8 +39,8 @@ async def register(user: Register, db: Session = Depends(get_db)):
 @app.post("/login")
 async def login(user: Login, db: Session = Depends(get_db)):
     query = select(User).where(User.username == user.username)
-    # returns the list of matched user objects
-    existing_user = db.query(User).filter(User.username == user.username).first()
+    # returns the list of matched user objects and take the first one
+    existing_user = db.execute(query).first()
     if not existing_user:
         raise HTTPException(
             status_code=400, detail="Invalid Username or Password")
