@@ -5,7 +5,15 @@ from sqlmodel import Field, Session, SQLModel, create_engine
 
 
 class Item(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: Optional[int] = Field(default=None, 
+                            primary_key=True,
+                            sa_column_kwargs={"autoincrement": True} )
+    name: str
+    price: float
+    is_offer: bool = False
+
+
+class ItemCreate(SQLModel):
     name: str
     price: float
     is_offer: bool = False
