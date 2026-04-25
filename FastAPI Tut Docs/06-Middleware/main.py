@@ -5,17 +5,27 @@ app = FastAPI()
 
 
 @app.middleware("http")
-async def request_time_counter(request:Request, call_next):
+async def add_process_time_header(request: Request, call_next):
+
     start_time = time.time()
     response = await call_next(request)
-    new_headers = {"X-Process-Time": str(time.time() - start_time)}
-    response.headers.update(new_headers)
+    
     process_time = time.time() - start_time
-    print(
-        f"Request method {request.method} at path {request.url} processed in {process_time} seconds")
+    
+    response.headers["X-Process-Time"] = str(process_time)
+    
+    print(f" {request.method} {request.url.path} took {process_time:.4f} seconds")
     return response
 
 
-@app.get("/",)
-def read_root():
+# Example endpoints
+@app.get("/")
+async def root():
     return {"message": "Hello World"}
+
+
+@app.get("/slow")
+async def slow_endpoint():
+    time.sleep(2)  # Simulate slow operation
+    return {"message": "This was slow!"}
+

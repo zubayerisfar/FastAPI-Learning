@@ -5,6 +5,7 @@ from typing import List
 from pydantic import BaseModel
 from db import SessionLocal, engine, Base
 from models import Item
+import uvicorn  
 
 # Create tables on startup
 Base.metadata.create_all(bind=engine)
@@ -92,3 +93,6 @@ def delete_item(item_id: int, db: Session = Depends(get_db)):
     db.delete(db_item)
     db.commit()
     return {"message": "Item deleted successfully"}
+
+if __name__ == "__main__":
+    uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)
