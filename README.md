@@ -56,10 +56,6 @@ Advanced middleware patterns including rate limiting.
 
 Asynchronous database operations in FastAPI.
 
-### 14 - [n8n With FastAPI](FastAPI%20Tut%20Docs/14-n8n-With-FastAPI/README.md)
-
-Integrating n8n automation with FastAPI applications.
-
 ---
 
 **Note:** Each folder contains detailed README files with specific implementation details and examples. Start with the basics and progress through the learning path.
