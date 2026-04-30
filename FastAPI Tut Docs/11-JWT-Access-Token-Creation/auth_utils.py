@@ -1,12 +1,13 @@
 from passlib.context import CryptContext
 from datetime import date, datetime, timedelta, timezone
 from jose import jwt, JWTError  # requires 'python-jose', 'jose' package
-
-password_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# pip install argon2-cffi
+# Using Argon2 - modern and secure with no password length limitations
+password_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
 SECRET_KEY = "ThisIsASecret"
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 1
+ACCESS_TOKEN_EXPIRE_MINUTES = 2
 REFRESH_TOKEN_EXPIRE_DAYS = 7
 
 

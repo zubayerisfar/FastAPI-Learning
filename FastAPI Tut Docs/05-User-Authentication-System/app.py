@@ -6,7 +6,8 @@ from db import engine, SessionLocal, Base
 from models import User
 from schema import Register, Login
 
-password_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Using Argon2 - modern and secure with no password length limitations
+password_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
 
 def get_db():
@@ -52,6 +53,7 @@ async def login(user: Login, db: Session = Depends(get_db)):
             status_code=400, detail="Invalid Username or Password")
 
     return {"message": "Login successful!", "username": existing_user.username}
+
 
 @app.get("/users/{user_id}")
 def read_user(user_id: int, db: Session = Depends(get_db)):

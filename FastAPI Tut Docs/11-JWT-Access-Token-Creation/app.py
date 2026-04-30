@@ -25,14 +25,23 @@ def get_db():
 
 
 class UserCreate(BaseModel):
-    username: str
-    password: str
-    email: str
+    username: str="testuser"
+    password: str="testpassword"
+    email: str="testuser@gmail.com"
 
 
 class UserLogin(BaseModel):
+    username: str="testuser"
+    password: str="testpassword"
+
+
+class UserResponse(BaseModel):
+    id: int
     username: str
-    password: str
+    email: str
+    
+    class Config:
+        from_attributes = True
 
 
 @app.post("/register")
@@ -78,6 +87,40 @@ def protected_route(credentials: HTTPAuthorizationCredentials = Depends(security
     if payload is None:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     return {"msg": f"Hello, {payload['sub']}! This is a protected route."}
+
+
+@app.get("/users", response_model=list[UserResponse])
+def get_all_users(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)):
+    # Verify token is valid
+    token = credentials.credentials
+    payload = decode_access_token(token)
+    if payload is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    
+    # Fetch all users from database
+    users = db.query(User).all()
+    return users
+
+
+@app.get("/users/{user_id}", response_model=UserResponse)
+def get_user_by_id(
+    user_id: int,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+    ):
+
+    # Verify token is valid
+    token = credentials.credentials
+    payload = decode_access_token(token)
+    if payload is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    
+    # Fetch user by ID
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    return user
 
 
 '''

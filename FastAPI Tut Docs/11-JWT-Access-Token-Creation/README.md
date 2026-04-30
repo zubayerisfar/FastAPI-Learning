@@ -1,101 +1,16 @@
-# JWT Access Token Creation - Detailed, Code-Aligned Tutorial
+# JWT Access Token & Refresh Token System - Complete Tutorial
 
 ## Overview
 
-This tutorial is based on the exact code currently present in this folder.
-
-Goal of this project:
-
-1. Register users with hashed passwords.
-2. Login users and issue two JWTs:
-   - access token (short life, currently 1 minute)
-   - refresh token (long life, currently 7 days)
-3. Protect an endpoint using bearer access token.
-4. Generate a new access token from refresh token.
+A complete authentication system where users register, login to get tokens, and access protected routes.
 
 ---
 
-## Project Files and Their Roles
+# PART 1: UNDERSTANDING THE DATABASE MODEL
 
-```text
-11. JWT Access Token Creation/
-|-- app.py
-|-- auth_utils.py
-|-- database.py
-|-- models.py
-|-- jwt_client.js
-|-- database.db
-`-- README.md
-```
+## Step 1: Create the User Model (`models.py`)
 
-1. `database.py`: DB connection, SQLAlchemy base, session factory.
-2. `models.py`: `User` table schema.
-3. `auth_utils.py`: password hash/verify + JWT create/decode helpers.
-4. `app.py`: API endpoints (`/register`, `/login`, `/refresh`, `/protected`).
-5. `jwt_client.js`: sample frontend flow for storing tokens and auto-refresh.
-
----
-
-## End-to-End Flow (Big Picture)
-
-1. Register:
-   - create user row with hashed password.
-2. Login:
-   - verify password,
-   - issue access token + refresh token.
-3. Protected call:
-   - send `Authorization: Bearer <access_token>`.
-4. Access token expires:
-   - call `/refresh` with refresh token,
-   - get new access token,
-   - retry protected request.
-
----
-
-## File-by-File, Line-by-Line Explanation
-
-## 1) `database.py`
-
-Current code:
-
-```python
-from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
-
-Base = declarative_base()
-
-DATABASE_URL = "sqlite:///./database.db"
-
-engine= create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
-
-SessionLocal= sessionmaker(autoflush=False, bind=engine)
-```
-
-Line-by-line explanation:
-
-1. `from sqlalchemy import create_engine`
-   - imports SQLAlchemy engine creator.
-2. `from sqlalchemy.ext.declarative import declarative_base`
-   - imports base class factory for ORM models.
-3. `from sqlalchemy.orm import sessionmaker`
-   - imports session factory utility.
-4. `Base = declarative_base()`
-   - creates shared base class used by ORM models.
-5. `DATABASE_URL = "sqlite:///./database.db"`
-   - sets SQLite file path.
-6. `engine= create_engine(...)`
-   - creates DB engine.
-   - `check_same_thread=False` is needed for SQLite with FastAPI request handling.
-7. `SessionLocal= sessionmaker(...)`
-   - builds session factory used per request.
-   - `autoflush=False` means SQLAlchemy will not auto-flush before each query.
-
----
-
-## 2) `models.py`
-
-Current code:
+First, we define what data gets stored in the database using SQLAlchemy ORM:
 
 ```python
 from database import Base
@@ -106,419 +21,722 @@ class User(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True)
-    password = Column(String)
+    password = Column(String)  # Stores Argon2 hash (NOT plain text)
     email = Column(String, unique=True, index=True)
 ```
 
-Line-by-line explanation:
+**Line-by-Line Explanation:**
 
 1. `from database import Base`
-   - imports shared SQLAlchemy base class.
+   - Import the base class that connects models to database tables
+
 2. `from sqlalchemy import Column, Integer, String`
-   - imports column and SQL types.
+   - Import column types for defining table fields
+
 3. `class User(Base):`
-   - creates ORM model class mapped to a table.
+   - Create a User model class that inherits from Base
+   - Automatically creates a database table
+
 4. `__tablename__ = "users"`
-   - table name is `users`.
+   - The actual SQL table name will be `users`
+
 5. `id = Column(Integer, primary_key=True, index=True)`
-   - integer PK with index.
+   - **Primary Key**: Unique identifier for each user (auto-increments)
+   - **index=True**: Creates database index for faster lookups
+
 6. `username = Column(String, unique=True, index=True)`
-   - unique username with index for faster lookup.
+   - **unique=True**: No two users can have same username
+   - **index=True**: Fast lookups by username
+
 7. `password = Column(String)`
-   - stores hashed password text.
+   - Stores **Argon2 hashed password** (not plain text for security)
+
 8. `email = Column(String, unique=True, index=True)`
-   - unique email with index.
+   - **unique=True**: No duplicate emails
+   - **index=True**: Fast email lookups
 
----
+**Database Table Created:**
 
-## 3) `auth_utils.py`
-
-Current code (key parts):
-
-```python
-from passlib.context import CryptContext
-from datetime import date, datetime, timedelta, timezone
-from jose import jwt, JWTError
-
-password_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-SECRET_KEY = "ThisIsASecret"
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 1
-REFRESH_TOKEN_EXPIRE_DAYS = 7
+```
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY,
+    username VARCHAR UNIQUE NOT NULL,
+    password VARCHAR NOT NULL,
+    email VARCHAR UNIQUE NOT NULL
+);
 ```
 
-Line-by-line explanation:
+**Example Data in Database:**
 
-1. `from passlib.context import CryptContext`
-   - password hash/verify helper from passlib.
-2. `from datetime import date, datetime, timedelta, timezone`
-   - datetime tools for expiry timestamps.
-   - note: `date` is imported but currently not used.
-3. `from jose import jwt, JWTError`
-   - JWT encode/decode and exception handling.
-4. `password_context = CryptContext(...)`
-   - configures bcrypt password hashing.
-5. `SECRET_KEY = "ThisIsASecret"`
-   - signing key for JWT (learning only; use env var in production).
-6. `ALGORITHM = "HS256"`
-   - JWT signing algorithm.
-7. `ACCESS_TOKEN_EXPIRE_MINUTES = 1`
-   - current access token lifetime.
-8. `REFRESH_TOKEN_EXPIRE_DAYS = 7`
-   - current refresh token lifetime.
-
-### Password helpers
-
-```python
-def hash_password(password: str):
-    return password_context.hash(password)
-
-
-def verify_password(plain_password: str, hashed_password: str):
-    return password_context.verify(plain_password, hashed_password)
 ```
-
-- `hash_password`: one-way hashes user password.
-- `verify_password`: checks plain password against stored hash.
-
-### Access token creation
-
-```python
-def create_access_token(data: dict, expires_delta: timedelta | None = None):
-    to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + (timedelta(
-        minutes=ACCESS_TOKEN_EXPIRE_MINUTES) if expires_delta is None else expires_delta)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
-```
-
-Line-by-line:
-
-1. copies incoming payload to avoid mutating original.
-2. computes expiry:
-   - default: now + 1 minute,
-   - or uses provided `expires_delta`.
-3. adds `exp` claim.
-4. signs token with secret + algorithm.
-5. returns token string.
-
-### Refresh token creation
-
-`create_refresh_token(...)` is same pattern, but expiry is now + 7 days by default.
-
-### Decode helpers
-
-```python
-def decode_access_token(token: str):
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload
-    except JWTError:
-        return None
-```
-
-- decodes and validates signature + expiry.
-- returns payload dict if valid.
-- returns `None` when invalid/expired.
-
-`decode_refresh_token` uses same pattern.
-
----
-
-## 4) `app.py`
-
-Current code:
-
-```python
-from fastapi import FastAPI, Depends, HTTPException, Header
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from sqlalchemy.orm import Session
-from database import SessionLocal, engine, Base
-from pydantic import BaseModel
-from models import User
-from auth_utils import (
-    hash_password, create_access_token, decode_access_token, verify_password,
-    create_refresh_token, decode_refresh_token
-)
-
-app = FastAPI()
-
-Base.metadata.create_all(bind=engine)
-security = HTTPBearer()
-```
-
-Line-by-line (setup section):
-
-1. `FastAPI, Depends, HTTPException, Header` imported from FastAPI.
-   - note: `Header` is imported but currently unused.
-2. `HTTPBearer, HTTPAuthorizationCredentials` imports security utilities.
-3. `Session` imports SQLAlchemy session type.
-4. imports DB setup (`SessionLocal`, `engine`, `Base`).
-5. imports Pydantic `BaseModel`.
-6. imports `User` model.
-7. imports auth helper functions.
-8. `app = FastAPI()` creates the API app.
-9. `Base.metadata.create_all(bind=engine)` creates DB tables if missing.
-10. `security = HTTPBearer()` sets bearer-token dependency extractor.
-
-### DB dependency function
-
-```python
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-```
-
-Line-by-line:
-
-1. opens DB session.
-2. yields session to route handler.
-3. always closes session in `finally`.
-
-### Request body models
-
-```python
-class UserCreate(BaseModel):
-    username: str
-    password: str
-    email: str
-
-
-class UserLogin(BaseModel):
-    username: str
-    password: str
-```
-
-- `UserCreate` validates `/register` body.
-- `UserLogin` validates `/login` body.
-
-### `/register` endpoint
-
-```python
-@app.post("/register")
-def register(user: UserCreate, db: Session = Depends(get_db)):
-    db_user = User(
-        username=user.username,
-        password=hash_password(user.password),
-        email=user.email
-    )
-    db.add(db_user)
-    db.commit()
-    db.refresh(db_user)
-    return {"msg": "User created successfully"}
-```
-
-Line-by-line:
-
-1. route decorator maps POST `/register`.
-2. receives validated `user` body and injected DB session.
-3. creates `User` object.
-4. hashes password before storing.
-5. adds row to session.
-6. commits transaction.
-7. refreshes object from DB.
-8. returns success response.
-
-### `/login` endpoint
-
-```python
-@app.post("/login")
-def login(user: UserLogin, db: Session = Depends(get_db)):
-    db_user = db.query(User).filter(
-        User.username == user.username).first()
-    if not db_user or not verify_password(user.password, db_user.password):
-        raise HTTPException(status_code=400, detail="Invalid credentials")
-    access_token = create_access_token(data={"sub": db_user.username})
-    refresh_token = create_refresh_token(data={"sub": db_user.username})
-    return {"access_token": access_token, "refresh_token": refresh_token}
-```
-
-Line-by-line:
-
-1. route decorator maps POST `/login`.
-2. queries first user with matching username.
-3. validates user existence + password hash check.
-4. raises `400` on invalid credentials.
-5. creates access token with `sub` claim = username.
-6. creates refresh token with same `sub`.
-7. returns both tokens.
-
-### `/refresh` endpoint
-
-```python
-@app.post("/refresh")
-def refresh_token_endpoint(refresh_token: str):
-    payload = decode_refresh_token(refresh_token)
-    if payload is None:
-        raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
-    new_access_token = create_access_token(data={"sub": payload["sub"]})
-    return {"access_token": new_access_token}
-```
-
-Line-by-line:
-
-1. route decorator maps POST `/refresh`.
-2. receives `refresh_token` as scalar parameter.
-   - in FastAPI this means query parameter by default (unless explicitly Body/Form).
-3. decodes/validates refresh token.
-4. returns `401` if invalid/expired.
-5. issues new access token using same subject.
-6. returns new access token.
-
-### `/protected` endpoint
-
-```python
-@app.get("/protected")
-def protected_route(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    token = credentials.credentials
-    payload = decode_access_token(token)
-    if payload is None:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-    return {"msg": f"Hello, {payload['sub']}! This is a protected route."}
-```
-
-Line-by-line:
-
-1. route decorator maps GET `/protected`.
-2. `Depends(security)` extracts bearer token from header.
-3. reads raw token string.
-4. decodes/validates access token.
-5. returns `401` if invalid/expired.
-6. returns protected message with `sub` value.
-
----
-
-## 5) `jwt_client.js` Note (Important)
-
-Current JS refresh call sends JSON body:
-
-```javascript
-body: JSON.stringify({ refresh_token: refreshToken });
-```
-
-But backend expects scalar `refresh_token` parameter (query style by default).
-
-To match current backend exactly, call refresh like:
-
-```text
-POST /refresh?refresh_token=<your_refresh_token>
-```
-
-Or update backend later to accept JSON body with Pydantic model.
-
----
-
-## 6) Exact API Usage (As Code Currently Works)
-
-### Register
-
-`POST /register`
-
-```json
-{
-  "username": "alice",
-  "password": "pass123",
-  "email": "alice@example.com"
-}
-```
-
-### Login
-
-`POST /login`
-
-```json
-{
-  "username": "alice",
-  "password": "pass123"
-}
-```
-
-Returns:
-
-```json
-{
-  "access_token": "<access_jwt>",
-  "refresh_token": "<refresh_jwt>"
-}
-```
-
-### Protected route
-
-`GET /protected`
-
-Header:
-
-```text
-Authorization: Bearer <access_jwt>
-```
-
-### Refresh route (current code shape)
-
-`POST /refresh?refresh_token=<refresh_jwt>`
-
-Returns:
-
-```json
-{
-  "access_token": "<new_access_jwt>"
-}
+| id | username  | password (hashed)              | email               |
+|----|-----------|--------------------------------|---------------------|
+| 1  | testuser  | $argon2id$v=19$m=65536$t=  ... |  testuser@gmail.com |
 ```
 
 ---
 
-## 7) Run Instructions
+# PART 2: RUNNING THE APPLICATION
 
-Install dependencies:
+## Step 1: Install Dependencies
 
 ```bash
-pip install fastapi uvicorn sqlalchemy python-jose[cryptography] passlib[bcrypt]
+pip install fastapi uvicorn sqlalchemy argon2-cffi python-jose[cryptography]
 ```
 
-Run server:
+## Step 2: Start the FastAPI Server
+
+Navigate to the project folder and run:
 
 ```bash
 uvicorn app:app --reload
 ```
 
-Open docs:
+**Console Output:**
 
-```text
+```
+INFO:     Uvicorn running on http://127.0.0.1:8000
+INFO:     Application startup complete
+```
+
+**What `--reload` does:**
+
+- Automatically restarts server when you change code
+- Great for development (remove in production)
+
+## Step 3: Database Auto-Creation
+
+When the app starts, this line in `app.py` executes:
+
+```python
+Base.metadata.create_all(bind=engine)
+```
+
+**What happens:**
+
+- Checks if `database.db` file exists
+- If not, creates it automatically
+- Creates the `users` table automatically
+- **No manual database setup needed!**
+
+---
+
+# PART 3: DATABASE MODELS SCREENSHOT
+
+**Visual Output - File Structure:**
+
+![Database Folder View](images/db_folder_view.png)
+
+After running `uvicorn app:app --reload`, you'll see:
+
+- `database.db` file created in your project folder
+- This is a SQLite database file
+- Contains the `users` table defined in `models.py`
+
+**What's Inside database.db:**
+
+```
+database.db
+└── users table
+    ├── id (auto-increment)
+    ├── username (unique)
+    ├── password (argon2 hash)
+    └── email (unique)
+```
+
+---
+
+# PART 4: SWAGGER UI - INTERACTIVE DOCUMENTATION
+
+## Open the Docs URL
+
+Open your browser and go to:
+
+```
 http://127.0.0.1:8000/docs
 ```
 
-Testing order:
+**Visual Output - Swagger UI:**
 
-1. `/register`
-2. `/login`
-3. `/protected` with access token
-4. wait > 1 minute (access token expires)
-5. `/refresh` with refresh token
-6. `/protected` with new access token
+![Swagger URL](images/swagger_url.png)
 
----
+**What You See:**
 
-## 8) Security Notes (Current vs Production)
+- All API endpoints organized in sections
+- Interactive testing interface (Try it out!)
+- Green "Authorize" button (top-right)
+- Each endpoint can be expanded to show details
+- Default request/response examples
 
-Current code is good for learning but improve before production:
+**Available Endpoints:**
 
-1. move `SECRET_KEY` to environment variable,
-2. avoid hardcoded secret values,
-3. add duplicate check for username/email before insert,
-4. consider stronger validation rules,
-5. use HTTPS,
-6. consider refresh token revocation strategy.
+- `POST /register` - Create new user account
+- `POST /login` - Get access & refresh tokens
+- `POST /refresh` - Get new access token when expired
+- `GET /users` - Get all users (protected)
+- `GET /users/{user_id}` - Get specific user (protected)
 
 ---
 
-## 9) Key Concept Summary
+# PART 5: USER REGISTRATION
 
-1. Access token is short-lived and used for protected endpoints.
-2. Refresh token is long-lived and used to issue new access tokens.
-3. Passwords are hashed before DB storage.
-4. Protected endpoint uses bearer header extraction + token decode.
-5. DB session lifecycle is managed per request via `get_db()`.
+## Understanding the Registration Code
+
+```python
+# In app.py
+class UserCreate(BaseModel):
+    username: str = "testuser"
+    password: str = "testpassword"
+    email: str = "testuser@gmail.com"
+
+@app.post("/register")
+def register(user: UserCreate, db: Session = Depends(get_db)):
+    # 1. Hash the password using Argon2
+    db_user = User(
+        username=user.username,
+        password=hash_password(user.password),  # ← Argon2 hashing
+        email=user.email
+    )
+
+    # 2. Add to database
+    db.add(db_user)
+    db.commit()           # Save to database
+    db.refresh(db_user)   # Reload from database
+
+    return {"msg": "User created successfully"}
+```
+
+**Code Explanation:**
+
+1. `UserCreate` - Pydantic model that validates request body
+2. `hash_password()` - One-way encryption using Argon2
+3. `db.add()` - Prepare the record for saving
+4. `db.commit()` - Actually save to database
+5. `db.refresh()` - Reload from database to get default values
+
+**Password Hashing Process:**
+
+```python
+def hash_password(password: str):
+    """Hash using Argon2 - one-way encryption"""
+    return password_context.hash(password)
+```
+
+## Testing Registration in Swagger
+
+1. Go to Swagger: `http://127.0.0.1:8000/docs`
+2. Click on `/register` endpoint
+3. Click **"Try it out"** button
+4. Swagger auto-fills with default values:
+   ```json
+   {
+     "username": "testuser",
+     "password": "testpassword",
+     "email": "testuser@gmail.com"
+   }
+   ```
+5. Click **"Execute"**
+
+**Visual Output:**
+
+![Register Success](images/register_success.png)
+
+## Registration Response
+
+**HTTP Status:** 200 OK
+
+**Response Body:**
+
+```json
+{
+  "msg": "User created successfully"
+}
+```
+
+**What Happened in Database:**
+
+New row added to `users` table:
+
+```
+| id | username  | password (hashed)              | email               |
+|----|-----------|-------------------------------|---------------------|
+| 1  | testuser  | $argon2id$v=19$m=65536$t=... | testuser@gmail.com |
+```
+
+**Important Security Points:**
+
+- Actual password (`testpassword`) is **never stored**
+- Only the Argon2 hash is saved
+- If database is hacked, passwords can't be recovered
+- Argon2 is modern & memory-hard (GPU resistant)
+
+---
+
+# PART 6: USER LOGIN
+
+## Understanding the Login Code
+
+```python
+# In app.py
+class UserLogin(BaseModel):
+    username: str = "testuser"
+    password: str = "testpassword"
+
+@app.post("/login")
+def login(user: UserLogin, db: Session = Depends(get_db)):
+    # 1. Find user in database
+    db_user = db.query(User).filter(
+        User.username == user.username
+    ).first()
+
+    # 2. Verify password (compare plain text with stored hash)
+    if not db_user or not verify_password(user.password, db_user.password):
+        raise HTTPException(status_code=400, detail="Invalid credentials")
+
+    # 3. Create access token (expires in 2 minutes)
+    access_token = create_access_token(data={"sub": db_user.username})
+
+    # 4. Create refresh token (expires in 7 days)
+    refresh_token = create_refresh_token(data={"sub": db_user.username})
+
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token
+    }
+```
+
+**Code Explanation:**
+
+1. **Query Database**: Find user by username
+2. **Verify Password**: Compare plain text password with stored hash using Argon2
+3. **Create Access Token**: Short-lived token (2 minutes) for API requests
+4. **Create Refresh Token**: Long-lived token (7 days) to refresh access tokens
+
+**Password Verification:**
+
+```python
+def verify_password(plain_password: str, hashed_password: str):
+    """Compare plain password with stored hash"""
+    return password_context.verify(plain_password, hashed_password)
+
+# Compares: "testpassword" with "$argon2id$v=19$..."
+# Returns: True (valid) or False (invalid)
+```
+
+## Testing Login in Swagger
+
+1. Go to Swagger: `http://127.0.0.1:8000/docs`
+2. Click on `/login` endpoint
+3. Click **"Try it out"** button
+4. Default values:
+   ```json
+   {
+     "username": "testuser",
+     "password": "testpassword"
+   }
+   ```
+5. Click **"Execute"**
+
+**Visual Output:**
+
+![Login with Tokens](images/login_w_access_token.png)
+
+## Login Response
+
+**HTTP Status:** 200 OK
+
+**Response Body:**
+
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0dXNlciIsImV4cCI6MTcxMzM3MTkyMH0.UB7Bvj1Y...",
+  "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0dXNlciIsImV4cCI6MTcxNDk3Njc2MH0.kqL9Jz..."
+}
+```
+
+**Token Details:**
+
+| Token             | Duration  | Purpose                                        |
+| ----------------- | --------- | ---------------------------------------------- |
+| **access_token**  | 2 minutes | Use for API requests in `Authorization` header |
+| **refresh_token** | 7 days    | Use to get new access_token when expired       |
+
+**Token Structure (JWT):**
+
+Each token is in format: `header.payload.signature`
+
+```json
+// Decoded access_token looks like:
+{
+  "sub": "testuser", // Subject = username
+  "exp": 1713371920, // Expiration time (Unix timestamp)
+  "iat": 1713371860 // Issued at time
+}
+```
+
+**Save both tokens for next steps**
+
+---
+
+# PART 7: TRYING TO ACCESS WITHOUT TOKEN
+
+## Accessing Protected Route (No Authorization)
+
+First, let's try accessing a protected route **without any token**.
+
+In Swagger:
+
+1. Find `/users` endpoint
+2. Click **"Try it out"**
+3. Click **"Execute"**
+4. **Do NOT authorize yet!**
+
+**What Happens:**
+
+The route is protected by:
+
+```python
+@app.get("/users", response_model=list[UserResponse])
+def get_all_users(
+    credentials: HTTPAuthorizationCredentials = Depends(security),  # ← Requires token!
+    db: Session = Depends(get_db)
+):
+    # Code never reaches here without valid token
+    pass
+```
+
+## Error Response
+
+**HTTP Status:** 401 Unauthorized
+
+**Response Body:**
+
+```json
+{
+  "detail": "Not authenticated"
+}
+```
+
+**Visual Output:**
+
+![Not Authorized](images/not_authorized.png)
+
+**Why It Failed:**
+
+The `HTTPBearer()` dependency looks for `Authorization: Bearer <token>` header:
+
+- No header found = 401 "Not authenticated"
+- Header missing = Request rejected immediately
+- User code never executes
+
+---
+
+# PART 8: AUTHORIZE IN SWAGGER UI
+
+## Click the Authorize Button
+
+In Swagger UI, locate the green **"Authorize"** button (top-right corner)
+
+**Visual Output:**
+
+![Auth Token Fillup](images/auth_token_fillup.png)
+
+## Enter Your Access Token
+
+A dialog box appears:
+
+```
+Available authorizations
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+HTTPBearer (http, Bearer)
+Value: ____________________________________
+       [Authorize]  [Cancel]
+```
+
+**Steps:**
+
+1. **Copy** your `access_token` from login response (Step 6)
+2. **Paste** it in the Value field
+   - Just the token itself (no "Bearer " prefix)
+   - Swagger adds "Bearer " automatically
+3. Click **"Authorize"** button
+
+## Authorization Added
+
+After clicking Authorize:
+
+Swagger adds this header to **every** subsequent request:
+
+```
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+Green lock icon appears on "Authorize" button
+
+All endpoints now include your token automatically
+
+**Behind the Scenes:**
+
+```python
+# When you authorize, Swagger does this for all requests:
+# Add header: Authorization: Bearer <your_access_token>
+
+# Your API receives request with header
+# HTTPBearer extracts the token
+# Token gets decoded and verified
+# If valid, request proceeds
+```
+
+---
+
+# PART 9: ACCESS PROTECTED ROUTE WITH VALID TOKEN
+
+## Calling /users with Authorization
+
+Now that you're authorized in Swagger, try again:
+
+1. Find `/users` endpoint
+2. Click **"Try it out"**
+3. Click **"Execute"**
+
+**What Happens:**
+
+Your request now includes:
+
+```
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+The API code executes:
+
+```python
+@app.get("/users", response_model=list[UserResponse])
+def get_all_users(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+):
+    # 1. Extract token from Authorization header
+    token = credentials.credentials
+    # token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+
+    # 2. Decode and verify token
+    payload = decode_access_token(token)
+    # payload = {"sub": "testuser", "exp": 1713371920}
+
+    # 3. Check if token is valid
+    if payload is None:
+        # Token expired or invalid
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    # 4. Token is valid - fetch users
+    users = db.query(User).all()
+    return users
+```
+
+**Token Verification:**
+
+```python
+def decode_access_token(token: str):
+    try:
+        payload = jwt.decode(
+            token,
+            SECRET_KEY,
+            algorithms=["HS256"]
+        )
+
+        return payload  #  Token valid
+    except JWTError:
+        return None  #  Token invalid or expired
+```
+
+## Success Response
+
+**HTTP Status:** 200 OK
+
+**Response Body:**
+
+```json
+[
+  {
+    "id": 1,
+    "username": "testuser",
+    "email": "testuser@gmail.com"
+  }
+]
+```
+
+**Visual Output:**
+
+![Authorized Access](images/authorized.png)
+
+**Important Notes:**
+
+- Password is **NOT** included in response (security)
+- Only public user info is returned (id, username, email)
+- Token was verified and valid
+- Request succeeded with 200 OK status
+
+---
+
+# PART 10: TOKEN EXPIRATION
+
+## Wait for Token to Expire
+
+Your access_token expires in **2 minutes**.
+
+**Configuration (in `auth_utils.py`):**
+
+```python
+ACCESS_TOKEN_EXPIRE_MINUTES = 2  # Your setting
+```
+
+The token contains expiration time:
+
+```json
+{
+  "sub": "testuser",
+  "exp": 1713371920,    ← Unix timestamp when token expires
+  "iat": 1713371860     ← Unix timestamp when created
+}
+```
+
+## Try Accessing After Expiration (2+ min later)
+
+After 2 minutes and 1 second have passed:
+
+1. Click `/users` endpoint
+2. Click **"Try it out"**
+3. Click **"Execute"**
+
+## Expiration Error Response
+
+**HTTP Status:** 401 Unauthorized
+
+**Response Body:**
+
+```json
+{
+  "detail": "Invalid or expired token"
+}
+```
+
+**Visual Output:**
+
+![Expired Token Error](images/expired_token.png)
+
+**Why It Failed:**
+
+When decoding the expired token:
+
+```python
+def decode_access_token(token: str):
+    try:
+        payload = jwt.decode(
+            token,
+            SECRET_KEY,
+            algorithms=["HS256"]
+        )
+        return payload
+    except JWTError:  # ← Exception caught
+        return None
+```
+
+**Error Flow:**
+
+1. Token received: `eyJhbGciOi...`
+2. Decoded successfully
+3. Current time checked: `2024-04-30 10:02:00`
+4. Expiration time: `2024-04-30 10:00:00`
+5. Current > Expiration = EXPIRED
+6. JWT raises JWTError
+7. Function returns None
+8. API returns 401 error
+
+---
+
+# PART 11: REFRESH TOKEN FOR NEW ACCESS TOKEN
+
+## Understanding the Refresh Process
+
+When your access_token expires, use refresh_token to get a new one **without logging in again**.
+
+```python
+@app.post("/refresh")
+def refresh_token_endpoint(refresh_token: str):
+    # 1. Decode refresh token
+    payload = decode_refresh_token(refresh_token)
+
+    # 2. Check if refresh token is valid
+    if payload is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired refresh token"
+        )
+
+    # 3. Create NEW access token with same username
+    new_access_token = create_access_token(
+        data={"sub": payload["sub"]}
+    )
+
+    return {"access_token": new_access_token}
+```
+
+## Testing Refresh in Swagger
+
+1. Get your `refresh_token` from login response (Step 6)
+2. In Swagger, click `/refresh` endpoint
+3. Click **"Try it out"**
+4. Paste your refresh_token in request body:
+   ```json
+   {
+     "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0dXNlciIsImV4cCI6MTcxNDk3Njc2MH0.kqL9Jz..."
+   }
+   ```
+5. Click **"Execute"**
+
+## Refresh Response
+
+**HTTP Status:** 200 OK
+
+**Response Body:**
+
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0dXNlciIsImV4cCI6MTcxMzM3Mjc5MH0.xYz789..."
+}
+```
+
+**New Access Token Details:**
+
+- Brand new token
+- Expires in 2 minutes (fresh countdown starts)
+- Same username as before
+- Different token string (different signature)
+- Can be used immediately
+
+## Use New Token for API Access
+
+1. Click **"Authorize"** button again
+2. Paste the new `access_token` in Value field
+3. Click **"Authorize"**
+4. Now you can call `/users` again for another 2 minutes!
+
+**Complete Cycle:**
+
+```
+Login (get tokens)
+    ↓
+Use access_token for API calls (2 min window)
+    ↓
+Token expires → 401 "Invalid or expired token"
+    ↓
+Call /refresh with refresh_token
+    ↓
+Get new access_token
+    ↓
+Use new access_token for API calls (2 min window)
+    ↓
+Repeat process (refresh valid for 7 days)
+    ↓
+After 7 days: Must login again to get new refresh token
+```
